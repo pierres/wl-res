@@ -3,13 +3,13 @@
 Tiny CLI that prints the primary display's resolution. Built for game launch
 scripts on Wayland.
 
+Pure-Rust Wayland client — no SDL, no libwayland-client at runtime. The release
+binary depends only on libc.
+
 ## Build
 
-    make
-    make install              # installs to ~/.local/bin
-    make install PREFIX=/usr  # or system-wide
-
-Requires SDL3 (`pkg-config sdl3`).
+    cargo build --release           # binary at ./target/release/screen-res
+    cargo install --path .          # installs to ~/.cargo/bin
 
 ## Usage
 
@@ -27,7 +27,7 @@ Add `-s` (or `--space`) to get space-separated output, ready for `read`:
 
 The aspect separator may be `:`, `x`, or `/`.
 
-Exit codes: `0` on success, `1` on SDL/display errors, `2` on bad arguments.
+Exit codes: `0` on success, `1` on Wayland/display errors, `2` on bad arguments.
 Errors go to stderr; results to stdout.
 
 ## Shell examples
@@ -46,7 +46,8 @@ Errors go to stderr; results to stdout.
   of GNOME/KDE desktop scaling (100%, 125%, 150%, 200%, ...). Desktop scaling
   is a per-surface concept on Wayland; the underlying `wl_output` mode is the
   panel's true resolution, which is what fullscreen games want.
-- **"Current" screen:** Wayland does not expose the cursor's output to clients
-  without a focused surface, so this tool always reports the primary display.
-  Detecting the launching terminal's output would require compositor-specific
-  protocols and is intentionally out of scope.
+- **"Primary" screen:** Wayland has no formal "primary output" concept. This
+  tool picks the output anchored at coordinate (0, 0), falling back to the
+  first one announced by the compositor. Detecting the *launching terminal's*
+  output would require compositor-specific protocols and is intentionally out
+  of scope.
