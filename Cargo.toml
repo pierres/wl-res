@@ -1,7 +1,8 @@
 [package]
-name = "screen-res"
+name = "wl-res"
 version = "0.1.0"
 edition = "2024"
+description = "Tiny Wayland CLI for printing the primary display's resolution, with aspect-ratio fitting"
 
 [dependencies]
 wayland-client = "0.31"

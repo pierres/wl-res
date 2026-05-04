@@ -1,4 +1,4 @@
-# screen-res
+# wl-res
 
 Tiny CLI that prints the primary display's resolution. Built for game launch
 scripts on Wayland.
@@ -8,22 +8,22 @@ binary depends only on libc.
 
 ## Build
 
-    cargo build --release           # binary at ./target/release/screen-res
+    cargo build --release           # binary at ./target/release/wl-res
     cargo install --path .          # installs to ~/.cargo/bin
 
 ## Usage
 
-    screen-res                # 2560x1440
-    screen-res width          # 2560
-    screen-res height         # 1440
-    screen-res aspect 4:3     # 1920x1440  (largest 4:3 box that fits)
-    screen-res aspect 16:9    # 2560x1440
-    screen-res aspect 21:9    # 2560x1097
+    wl-res                # 2560x1440
+    wl-res width          # 2560
+    wl-res height         # 1440
+    wl-res aspect 4:3     # 1920x1440  (largest 4:3 box that fits)
+    wl-res aspect 16:9    # 2560x1440
+    wl-res aspect 21:9    # 2560x1097
 
 Add `-s` (or `--space`) to get space-separated output, ready for `read`:
 
-    screen-res -s             # 2560 1440
-    screen-res -s aspect 4:3  # 1920 1440
+    wl-res -s             # 2560 1440
+    wl-res -s aspect 4:3  # 1920 1440
 
 The aspect separator may be `:`, `x`, or `/`.
 
@@ -33,12 +33,12 @@ Errors go to stderr; results to stdout.
 ## Shell examples
 
     # split into W and H
-    read W H < <(screen-res -s aspect 4:3)
+    read W H < <(wl-res -s aspect 4:3)
     mygame --width "$W" --height "$H"
 
     # use directly
-    mygame --resolution "$(screen-res)"
-    mygame --width "$(screen-res width)"
+    mygame --resolution "$(wl-res)"
+    mygame --width "$(wl-res width)"
 
 ## Notes
 

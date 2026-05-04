@@ -1,4 +1,4 @@
-//! screen-res — print the primary Wayland display's resolution.
+//! wl-res — print the primary Wayland display's resolution.
 
 mod aspect;
 mod wayland;
@@ -31,7 +31,7 @@ fn main() -> ExitCode {
     let (w, h) = (out.width as i64, out.height as i64);
 
     let args: Vec<String> = env::args().collect();
-    let prog = args.first().map(|s| s.as_str()).unwrap_or("screen-res");
+    let prog = args.first().map(|s| s.as_str()).unwrap_or("wl-res");
     let mut sep = 'x';
     let mut positional: Vec<&str> = Vec::new();
     for a in &args[1..] {
