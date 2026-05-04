@@ -5,8 +5,8 @@
 //! `geometry`/`mode`/`done` events that follow.
 
 use wayland_client::{
-    protocol::{wl_output, wl_registry},
     Connection, Dispatch, QueueHandle, WEnum,
+    protocol::{wl_output, wl_registry},
 };
 
 #[derive(Default, Clone, Debug)]
@@ -86,8 +86,8 @@ impl Dispatch<wl_output::WlOutput, u32> for State {
 }
 
 pub fn query_outputs() -> Result<Vec<Output>, String> {
-    let conn = Connection::connect_to_env()
-        .map_err(|e| format!("Failed to connect to Wayland: {e}"))?;
+    let conn =
+        Connection::connect_to_env().map_err(|e| format!("Failed to connect to Wayland: {e}"))?;
     let display = conn.display();
     let mut event_queue = conn.new_event_queue::<State>();
     let qh = event_queue.handle();
