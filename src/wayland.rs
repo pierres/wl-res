@@ -37,15 +37,14 @@ impl Dispatch<wl_registry::WlRegistry, ()> for State {
             interface,
             version,
         } = event
+            && interface == "wl_output"
         {
-            if interface == "wl_output" {
-                let v = version.min(4);
-                registry.bind::<wl_output::WlOutput, u32, Self>(name, v, qh, name);
-                state.outputs.push(Output {
-                    global_name: name,
-                    ..Default::default()
-                });
-            }
+            let v = version.min(4);
+            registry.bind::<wl_output::WlOutput, u32, Self>(name, v, qh, name);
+            state.outputs.push(Output {
+                global_name: name,
+                ..Default::default()
+            });
         }
     }
 }
@@ -72,18 +71,14 @@ impl Dispatch<wl_output::WlOutput, u32> for State {
                 out.y = y;
             }
             wl_output::Event::Mode {
-                flags,
+                flags: WEnum::Value(flags),
                 width,
                 height,
                 ..
-            } => {
-                if let WEnum::Value(f) = flags {
-                    if f.contains(wl_output::Mode::Current) {
-                        out.width = width;
-                        out.height = height;
-                        out.has_current_mode = true;
-                    }
-                }
+            } if flags.contains(wl_output::Mode::Current) => {
+                out.width = width;
+                out.height = height;
+                out.has_current_mode = true;
             }
             _ => {}
         }
