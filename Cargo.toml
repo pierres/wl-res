@@ -1,6 +1,6 @@
 [package]
 name = "wl-res"
-version = "0.0.0"
+version = "0.1.0"
 edition = "2024"
 description = "Wayland CLI for printing the primary display's resolution, with aspect-ratio fitting"
 license = "MIT"
