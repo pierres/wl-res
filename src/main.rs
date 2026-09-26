@@ -29,6 +29,43 @@ Options:
   -h, --help      Print this help message
   -v, --version   Print version information";
 
+enum Command {
+    Resolution,
+    Width,
+    Height,
+    Aspect(i64, i64),
+}
+
+fn parse_command(positional: &[&str]) -> Result<Command, String> {
+    let command = match positional.first().copied().unwrap_or("resolution") {
+        "resolution" => Command::Resolution,
+        "width" => Command::Width,
+        "height" => Command::Height,
+        "aspect" => {
+            let spec = positional
+                .get(1)
+                .ok_or("Error: 'aspect' command requires a ratio (e.g. 16:9)")?;
+            let (aw, ah) = parse_aspect(spec)
+                .ok_or_else(|| format!("Invalid aspect ratio {spec} (expected e.g. 4:3)"))?;
+            Command::Aspect(aw, ah)
+        }
+        other => return Err(format!("Unknown command: {other}")),
+    };
+
+    let expected = if matches!(command, Command::Aspect(..)) {
+        2
+    } else if positional.is_empty() {
+        0
+    } else {
+        1
+    };
+    if positional.len() > expected {
+        return Err(format!("Unexpected argument: {}", positional[expected]));
+    }
+
+    Ok(command)
+}
+
 fn main() -> ExitCode {
     // env::args() is an iterator over the command line arguments.
     // .collect() turns the iterator into a Vec (list).
@@ -59,6 +96,15 @@ fn main() -> ExitCode {
         }
     }
 
+    let command = match parse_command(&positional) {
+        Ok(command) => command,
+        Err(error) => {
+            eprintln!("{error}");
+            eprintln!("\n{HELP}");
+            return ExitCode::from(2);
+        }
+    };
+
     // 1. Ask Wayland for all displays.
     let outputs = match query_outputs() {
         Ok(o) => o,
@@ -81,28 +127,13 @@ fn main() -> ExitCode {
     };
 
     // 4. Execute the requested command.
-    let cmd = positional.first().copied().unwrap_or("resolution");
-    match cmd {
-        "resolution" => println!("{w}{sep}{h}"),
-        "width" => println!("{w}"),
-        "height" => println!("{h}"),
-        "aspect" => {
-            let Some(spec) = positional.get(1) else {
-                eprintln!("Error: 'aspect' command requires a ratio (e.g. 16:9)");
-                eprintln!("\n{HELP}");
-                return ExitCode::from(2);
-            };
-            let Some((aw, ah)) = parse_aspect(spec) else {
-                eprintln!("Invalid aspect ratio {spec} (expected e.g. 4:3)");
-                return ExitCode::from(2);
-            };
+    match command {
+        Command::Resolution => println!("{w}{sep}{h}"),
+        Command::Width => println!("{w}"),
+        Command::Height => println!("{h}"),
+        Command::Aspect(aw, ah) => {
             let (tw, th) = fit_aspect(w, h, aw, ah);
             println!("{tw}{sep}{th}");
-        }
-        _ => {
-            eprintln!("Unknown command: {cmd}");
-            eprintln!("\n{HELP}");
-            return ExitCode::from(2);
         }
     }
 
