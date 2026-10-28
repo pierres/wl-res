@@ -39,3 +39,5 @@ gamescope -w "$W" -h "$H" -- %command%
 - **Primary Screen:** Wayland has no formal "primary output" concept. This tool
   picks the output anchored at coordinate (0, 0), falling back to the first one
   announced by the compositor.
+- **Timeout:** If the compositor does not provide display information within
+  five seconds, the tool prints an error and exits with code `1`.

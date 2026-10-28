@@ -11,9 +11,16 @@
 //! 3. Identify and "Bind" to 'wl_output' globals.
 //! 4. Wait for 'wl_output' to send its geometry and mode (resolution) events.
 
+use std::{
+    io::ErrorKind,
+    time::{Duration, Instant},
+};
+
+use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use wayland_client::{
-    Connection, Dispatch, Proxy, QueueHandle, WEnum,
-    protocol::{wl_output, wl_registry},
+    Connection, Dispatch, EventQueue, Proxy, QueueHandle, WEnum,
+    backend::WaylandError,
+    protocol::{wl_callback, wl_output, wl_registry},
 };
 
 /// Represents a physical or virtual display.
@@ -33,7 +40,7 @@ pub struct Output {
     pub transform: wl_output::Transform,
     /// Whether we've successfully received a "Current" mode event.
     pub has_current_mode: bool,
-    /// Whether the compositor sent the 'Done' event, indicating all data is received.
+    /// Whether initial output information has been received.
     pub is_done: bool,
 }
 
@@ -70,6 +77,20 @@ impl Output {
 /// This is our application state. It holds the list of outputs we find.
 struct State {
     outputs: Vec<Output>,
+    registry_done: bool,
+}
+
+impl Dispatch<wl_callback::WlCallback, ()> for State {
+    fn event(
+        state: &mut Self,
+        _: &wl_callback::WlCallback,
+        _: wl_callback::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        state.registry_done = true;
+    }
 }
 
 /// The 'Dispatch' trait is how we handle Wayland events.
@@ -113,7 +134,7 @@ impl Dispatch<wl_registry::WlRegistry, ()> for State {
 impl Dispatch<wl_output::WlOutput, u32> for State {
     fn event(
         state: &mut Self,
-        _: &wl_output::WlOutput,
+        output: &wl_output::WlOutput,
         event: wl_output::Event,
         global_name: &u32,
         _: &Connection,
@@ -156,6 +177,9 @@ impl Dispatch<wl_output::WlOutput, u32> for State {
                     out.width = width;
                     out.height = height;
                     out.has_current_mode = true;
+                    if output.version() < 2 {
+                        out.is_done = true;
+                    }
                 }
             }
             // 'Done' is critical: it means the compositor has finished sending
@@ -174,6 +198,10 @@ pub fn query_outputs() -> Result<Vec<Output>, String> {
     let conn =
         Connection::connect_to_env().map_err(|e| format!("Failed to connect to Wayland: {e}"))?;
 
+    query_connection(conn, Instant::now() + Duration::from_secs(5))
+}
+
+fn query_connection(conn: Connection, deadline: Instant) -> Result<Vec<Output>, String> {
     // 2. The display object is the root of the protocol.
     let display = conn.display();
 
@@ -186,34 +214,69 @@ pub fn query_outputs() -> Result<Vec<Output>, String> {
 
     let mut state = State {
         outputs: Vec::new(),
+        registry_done: false,
     };
 
-    // 5. Run a 'roundtrip'. This blocks until all current requests are sent
-    // and all resulting events are processed.
-    // This first roundtrip fills our 'state.outputs' by processing 'Global' events.
-    event_queue
-        .roundtrip(&mut state)
-        .map_err(|e| format!("Wayland registry roundtrip failed: {e}"))?;
-
-    // If no displays were even found, we can stop here.
-    if state.outputs.is_empty() {
-        return Ok(state.outputs);
-    }
-
-    // 6. Keep running roundtrips until all bound outputs have sent their 'Done' event.
-    // Technically, one roundtrip is enough for a compliant server, but we use a
-    // small loop (10 is an arbitrary 'safe' number) as a failsafe against buggy
-    // compositors or extreme system lag. This ensures we don't hang forever.
-    for _ in 0..10 {
-        if !state.outputs.is_empty() && state.outputs.iter().all(|o| o.is_done) {
-            break;
-        }
-        event_queue
-            .roundtrip(&mut state)
-            .map_err(|e| format!("Wayland output roundtrip failed: {e}"))?;
-    }
+    // The sync callback marks the end of the initial registry announcements.
+    display.sync(&qh, ());
+    dispatch_until(&mut event_queue, &mut state, deadline, |s| s.registry_done)?;
+    dispatch_until(&mut event_queue, &mut state, deadline, |s| {
+        s.outputs.iter().all(|o| o.is_done)
+    })?;
 
     Ok(state.outputs)
+}
+
+fn dispatch_until(
+    queue: &mut EventQueue<State>,
+    state: &mut State,
+    deadline: Instant,
+    complete: fn(&State) -> bool,
+) -> Result<(), String> {
+    loop {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .filter(|duration| !duration.is_zero())
+            .ok_or("Timed out waiting for Wayland display information")?;
+        queue
+            .dispatch_pending(state)
+            .map_err(|e| format!("Failed to dispatch Wayland events: {e}"))?;
+        if complete(state) {
+            return Ok(());
+        }
+
+        let mut interest = PollFlags::IN;
+        match queue.flush() {
+            Ok(()) => {}
+            Err(WaylandError::Io(e)) if e.kind() == ErrorKind::WouldBlock => {
+                interest |= PollFlags::OUT;
+            }
+            Err(e) => return Err(format!("Failed to flush Wayland requests: {e}")),
+        }
+        let Some(guard) = queue.prepare_read() else {
+            continue;
+        };
+        let fd = guard.connection_fd();
+        let mut fds = [PollFd::new(&fd, interest)];
+        let timeout = Timespec::try_from(remaining).unwrap();
+        match poll(&mut fds, Some(&timeout)) {
+            Ok(0) => return Err("Timed out waiting for Wayland display information".into()),
+            Ok(_) => {}
+            Err(rustix::io::Errno::INTR) => continue,
+            Err(e) => return Err(format!("Failed to poll Wayland connection: {e}")),
+        }
+        if fds[0]
+            .revents()
+            .intersects(PollFlags::IN | PollFlags::ERR | PollFlags::HUP)
+        {
+            match guard.read() {
+                Ok(_) => {}
+                Err(WaylandError::Io(e))
+                    if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::Interrupted) => {}
+                Err(e) => return Err(format!("Failed to read Wayland events: {e}")),
+            }
+        }
+    }
 }
 
 /// Wayland has no formal "primary output" concept.
@@ -235,6 +298,150 @@ pub fn pick_primary(outputs: &[Output]) -> Option<&Output> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{
+        io::{Read, Write},
+        net::Shutdown,
+        os::unix::net::UnixStream,
+        sync::mpsc,
+        thread,
+    };
+
+    enum Server {
+        StalledRegistry,
+        StalledOutput,
+        MissingDone,
+        Complete(u32),
+    }
+
+    fn send_event(stream: &mut UnixStream, object: u32, opcode: u32, payload: &[u32]) {
+        let header = ((8 + payload.len() as u32 * 4) << 16) | opcode;
+        let bytes: Vec<_> = [object, header]
+            .into_iter()
+            .chain(payload.iter().copied())
+            .flat_map(u32::to_ne_bytes)
+            .collect();
+        stream.write_all(&bytes).unwrap();
+    }
+
+    fn query_server(server: Server) -> Result<Vec<Output>, String> {
+        let (client, mut stream) = UnixStream::pair().unwrap();
+        let control = stream.try_clone().unwrap();
+        let server_thread = thread::spawn(move || {
+            let mut registry = 0;
+            let mut syncs = 0;
+            let version = match server {
+                Server::Complete(version) => version,
+                _ => 4,
+            };
+            loop {
+                let mut header = [0; 8];
+                if stream.read_exact(&mut header).is_err() {
+                    break;
+                }
+                let object = u32::from_ne_bytes(header[..4].try_into().unwrap());
+                let header = u32::from_ne_bytes(header[4..].try_into().unwrap());
+                let mut payload = vec![0; (header >> 16) as usize - 8];
+                stream.read_exact(&mut payload).unwrap();
+                let word =
+                    |offset| u32::from_ne_bytes(payload[offset..offset + 4].try_into().unwrap());
+                match (object, header & 0xffff) {
+                    (1, 1) => {
+                        registry = word(0);
+                        if !matches!(server, Server::StalledRegistry) {
+                            // wl_registry.global: name, padded "wl_output", version.
+                            send_event(
+                                &mut stream,
+                                registry,
+                                0,
+                                &[
+                                    1,
+                                    10,
+                                    u32::from_ne_bytes(*b"wl_o"),
+                                    u32::from_ne_bytes(*b"utpu"),
+                                    u32::from_ne_bytes(*b"t\0\0\0"),
+                                    version,
+                                ],
+                            );
+                        }
+                    }
+                    (1, 0) => {
+                        syncs += 1;
+                        if !matches!(server, Server::StalledRegistry)
+                            && (!matches!(server, Server::StalledOutput) || syncs == 1)
+                        {
+                            send_event(&mut stream, word(0), 0, &[0]);
+                        }
+                    }
+                    (object, 0) if object == registry => {
+                        if matches!(server, Server::Complete(_) | Server::MissingDone) {
+                            let output = word(payload.len() - 4);
+                            send_event(&mut stream, output, 1, &[1, 1920, 1080, 60_000]);
+                            if version >= 2 && !matches!(server, Server::MissingDone) {
+                                send_event(&mut stream, output, 2, &[]);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        });
+        let (sender, receiver) = mpsc::channel();
+        let query_thread = thread::spawn(move || {
+            let conn = Connection::from_socket(client).unwrap();
+            let result = query_connection(conn, Instant::now() + Duration::from_millis(100));
+            sender.send(result).unwrap();
+        });
+        let result = receiver.recv_timeout(Duration::from_secs(2));
+        control.shutdown(Shutdown::Both).unwrap();
+        query_thread.join().unwrap();
+        server_thread.join().unwrap();
+        result.expect("Wayland query did not respect its deadline")
+    }
+
+    #[test]
+    fn query_times_out_when_registry_stalls() {
+        assert!(
+            query_server(Server::StalledRegistry)
+                .unwrap_err()
+                .contains("Timed out")
+        );
+    }
+
+    #[test]
+    fn query_times_out_when_output_stalls() {
+        assert!(
+            query_server(Server::StalledOutput)
+                .unwrap_err()
+                .contains("Timed out")
+        );
+    }
+
+    #[test]
+    fn query_times_out_when_output_never_sends_done() {
+        assert!(
+            query_server(Server::MissingDone)
+                .unwrap_err()
+                .contains("Timed out")
+        );
+    }
+
+    #[test]
+    fn query_receives_output_before_deadline() {
+        let outputs = query_server(Server::Complete(4)).unwrap();
+        assert_eq!(
+            pick_primary(&outputs).unwrap().logical_resolution(),
+            (1920, 1080)
+        );
+    }
+
+    #[test]
+    fn query_supports_outputs_without_done_in_version_one() {
+        let outputs = query_server(Server::Complete(1)).unwrap();
+        assert_eq!(
+            pick_primary(&outputs).unwrap().logical_resolution(),
+            (1920, 1080)
+        );
+    }
 
     // Helper to create an Output for testing.
     fn make(global_name: u32, x: i32, y: i32, width: i32, height: i32) -> Output {
