@@ -6,6 +6,7 @@ description = "Wayland CLI for printing the primary display's resolution, with a
 license = "MIT"
 
 [dependencies]
+rustix = { version = "1", features = ["event"] }
 wayland-client = "0.31"
 
 [profile.release]
